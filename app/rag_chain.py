@@ -317,5 +317,5 @@ def run_rag(question: str) -> tuple[str, str]:
                 answer = chain.invoke({"context": context, "question": question})
                 return answer, "gemini-2.5-flash"
             except Exception:
-                return "Hệ thống đang quá tải. Vui lòng thử lại sau.", "error"
+                return "Hệ thống đang quá tải Vui lòng thử lại sau."
         raise e
