@@ -11,8 +11,8 @@ app = FastAPI(title="TNU-AIQA Chatbot API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("ALLOWED_ORIGINS", "*")],
-    allow_credentials=True,
+    allow_origins=["*"],  # cho phép tất cả
+    allow_credentials=False,  # phải False khi dùng *
     allow_methods=["*"],
     allow_headers=["*"],
 )
