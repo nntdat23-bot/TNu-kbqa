@@ -34,10 +34,25 @@ driver = GraphDatabase.driver(
 
 # Embedder — dùng cho Neo4j vector search (thay ChromaDB)
 embedder = SentenceTransformer("intfloat/multilingual-e5-small")
+_embedder = None
 
+def get_embedder():
+    global _embedder
+    if _embedder is None:
+        print("Loading embedder...")
+        _embedder = SentenceTransformer("intfloat/multilingual-e5-small")
+    return _embedder
 # Reranker
 ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2")
 
+_ranker = None
+
+def get_ranker():
+    global _ranker
+    if _ranker is None:
+        print("Loading ranker...")
+        _ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2")
+    return _ranker
 # Keywords nhận biết intent tóm tắt
 SUMMARY_KEYWORDS = [
     "tóm tắt", "tổng hợp", "nội dung bài", "bài viết về",
@@ -128,7 +143,7 @@ def get_all_docs_from_neo4j() -> list[Document]:
 
 def neo4j_vector_search(query: str, top_k: int = 4) -> list[Document]:
     """Vector search trực tiếp trên Neo4j — thay thế ChromaDB."""
-    query_embedding = embedder.encode(f"query: {query}").tolist()
+    query_embedding = get_embedder.encode(f"query: {query}").tolist()
     docs = []
     with driver.session() as session:
         try:
@@ -246,7 +261,7 @@ def rerank(query: str, docs: list[Document], top_k: int = 5) -> list[Document]:
         return []
     passages = [{"id": i, "text": d.page_content} for i, d in enumerate(docs)]
     request = RerankRequest(query=query, passages=passages)
-    results = ranker.rerank(request)
+    results = get_ranker.rerank(request)
     ranked_ids = [r["id"] for r in results[:top_k]]
     return [docs[i] for i in ranked_ids]
 
