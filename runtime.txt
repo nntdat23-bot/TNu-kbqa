@@ -1,1 +1,2 @@
-echo "python-3.11.0" > E:\TNu\tnu-aiqa-kbqa\runtime.txt
+# Chạy trong PowerShell
+"python-3.11.9" | Out-File -FilePath E:\TNu\tnu-aiqa-kbqa\runtime.txt -Encoding utf8 -NoNewline
