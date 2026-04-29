@@ -32,8 +32,7 @@ driver = GraphDatabase.driver(
     auth=(os.getenv("NEO4J_USERNAME"), os.getenv("NEO4J_PASSWORD"))
 )
 
-# Embedder — dùng cho Neo4j vector search (thay ChromaDB)
-embedder = SentenceTransformer("intfloat/multilingual-e5-small")
+# Lazy load embedder
 _embedder = None
 
 def get_embedder():
@@ -42,9 +41,8 @@ def get_embedder():
         print("Loading embedder...")
         _embedder = SentenceTransformer("intfloat/multilingual-e5-small")
     return _embedder
-# Reranker
-ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2")
 
+# Lazy load ranker
 _ranker = None
 
 def get_ranker():
@@ -53,6 +51,7 @@ def get_ranker():
         print("Loading ranker...")
         _ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2")
     return _ranker
+
 # Keywords nhận biết intent tóm tắt
 SUMMARY_KEYWORDS = [
     "tóm tắt", "tổng hợp", "nội dung bài", "bài viết về",
@@ -143,7 +142,7 @@ def get_all_docs_from_neo4j() -> list[Document]:
 
 def neo4j_vector_search(query: str, top_k: int = 4) -> list[Document]:
     """Vector search trực tiếp trên Neo4j — thay thế ChromaDB."""
-    query_embedding = get_embedder.encode(f"query: {query}").tolist()
+    query_embedding = get_embedder().encode(f"query: {query}").tolist()  # gọi get_embedder()
     docs = []
     with driver.session() as session:
         try:
@@ -232,7 +231,6 @@ def find_article_by_title(question: str) -> list[Document]:
                 }
             ))
 
-    # Fallback sang Neo4j vector search
     if not docs:
         print(f"⚠️ Không tìm thấy theo title, dùng Neo4j vector search...")
         docs = neo4j_vector_search(topic, top_k=8)
@@ -261,7 +259,7 @@ def rerank(query: str, docs: list[Document], top_k: int = 5) -> list[Document]:
         return []
     passages = [{"id": i, "text": d.page_content} for i, d in enumerate(docs)]
     request = RerankRequest(query=query, passages=passages)
-    results = get_ranker.rerank(request)
+    results = get_ranker().rerank(request)  # gọi get_ranker()
     ranked_ids = [r["id"] for r in results[:top_k]]
     return [docs[i] for i in ranked_ids]
 
@@ -306,14 +304,11 @@ def hybrid_search(query: str, top_k: int = 6) -> tuple[str, list[str]]:
     # Bước 2: Query Expansion
     queries = expand_query(query)
 
-    # Bước 3: Neo4j Vector + BM25 cho mỗi query
+    # Bước 3: Neo4j Vector + BM25
     all_retrieved = list(priority_docs)
     for q in queries:
-        # Neo4j Vector search (thay ChromaDB)
         vector_docs = neo4j_vector_search(q, top_k=3)
         all_retrieved.extend(vector_docs)
-
-        # BM25
         try:
             bm25_retriever = BM25Retriever.from_documents(all_docs, k=3)
             all_retrieved.extend(bm25_retriever.invoke(q))
@@ -329,23 +324,21 @@ def hybrid_search(query: str, top_k: int = 6) -> tuple[str, list[str]]:
             seen.add(key)
             unique.append(d)
 
-    # Bước 5: Rerank với query gốc
+    # Bước 5: Rerank
     if len(unique) > top_k:
         unique = rerank(query, unique, top_k=top_k * 2)
 
     # Bước 6: Relevance filter
     unique = [d for d in unique if _is_relevant(query, d.page_content)]
 
-    # Bước 7: Đảm bảo priority_docs luôn có trong kết quả cuối
+    # Bước 7: Priority docs luôn có mặt
     final = []
     final_keys = set()
-
     for d in priority_docs[:2]:
         key = d.page_content[:80]
         if key not in final_keys:
             final_keys.add(key)
             final.append(d)
-
     for d in unique:
         key = d.page_content[:80]
         if key not in final_keys and len(final) < top_k:
@@ -363,7 +356,7 @@ def hybrid_search(query: str, top_k: int = 6) -> tuple[str, list[str]]:
 
 
 def run_rag(question: str) -> tuple[str, str]:
-    """Groq primary, Gemini fallback. Dùng prompt riêng cho tóm tắt."""
+    """Groq primary, Gemini fallback."""
     context, sources = hybrid_search(question)
 
     if not context.strip():
