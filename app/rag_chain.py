@@ -41,6 +41,20 @@ def get_ranker():
         _ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2")
     return _ranker
 
+# Cache BM25 — tránh load Neo4j mỗi request
+_bm25_retriever = None
+_bm25_docs_count = 0
+
+def get_bm25_retriever() -> BM25Retriever:
+    """Cache BM25 retriever — chỉ rebuild khi data thay đổi."""
+    global _bm25_retriever, _bm25_docs_count
+    all_docs = get_all_docs_from_neo4j()
+    if _bm25_retriever is None or len(all_docs) != _bm25_docs_count:
+        print(f"Building BM25 index ({len(all_docs)} docs)...")
+        _bm25_retriever = BM25Retriever.from_documents(all_docs, k=3)
+        _bm25_docs_count = len(all_docs)
+    return _bm25_retriever
+
 # Keywords nhận biết intent tóm tắt
 SUMMARY_KEYWORDS = [
     "tóm tắt", "tổng hợp", "nội dung bài", "bài viết về",
@@ -99,7 +113,7 @@ def detect_summary_intent(question: str) -> bool:
 
 
 def get_all_docs_from_neo4j() -> list[Document]:
-    """Lấy tất cả documents từ Neo4j cho BM25."""
+    """Lấy tất cả documents từ Neo4j."""
     docs = []
     with driver.session() as session:
         records = session.run(
@@ -170,14 +184,11 @@ def find_article_by_title(question: str) -> list[Document]:
             ))
 
     if not docs:
-        # Fallback: BM25 search
-        all_docs = get_all_docs_from_neo4j()
-        if all_docs:
-            try:
-                bm25 = BM25Retriever.from_documents(all_docs, k=8)
-                docs = bm25.invoke(topic)
-            except Exception as e:
-                print(f"⚠️ BM25 fallback error: {e}")
+        print("⚠️ Fallback BM25...")
+        try:
+            docs = get_bm25_retriever().invoke(topic)
+        except Exception as e:
+            print(f"⚠️ BM25 fallback error: {e}")
 
     print(f"✅ Tìm được {len(docs)} chunks")
     return docs
@@ -226,8 +237,7 @@ def _is_relevant(query: str, content: str, threshold: float = 0.1) -> bool:
 def hybrid_search(query: str, top_k: int = 6) -> tuple[str, list[str]]:
     """
     Pipeline tiết kiệm RAM:
-    Neo4j Exact + BM25 + Query Expansion → Dedup → Rerank → Filter
-    KHÔNG dùng Vector Search (tiết kiệm ~400MB RAM)
+    Neo4j Exact + BM25 (cached) + Query Expansion → Dedup → Rerank → Filter
     """
 
     # Detect summary intent
@@ -239,21 +249,18 @@ def hybrid_search(query: str, top_k: int = 6) -> tuple[str, list[str]]:
             sources = list(set([d.metadata.get("title", "")[:100] for d in docs]))
             return context, sources
 
-    all_docs = get_all_docs_from_neo4j()
-    if not all_docs:
-        return "", []
-
     # Bước 1: Neo4j exact — priority
     priority_docs = neo4j_exact_search(query)
 
     # Bước 2: Query expansion
     queries = expand_query(query)
 
-    # Bước 3: BM25 cho mỗi query
+    # Bước 3: BM25 cached cho mỗi query
     all_retrieved = list(priority_docs)
+    bm25 = get_bm25_retriever()  # dùng cache
     for q in queries:
         try:
-            bm25 = BM25Retriever.from_documents(all_docs, k=3)
+            bm25.k = 3
             all_retrieved.extend(bm25.invoke(q))
         except Exception as e:
             print(f"⚠️ BM25 error: {e}")
@@ -317,5 +324,5 @@ def run_rag(question: str) -> tuple[str, str]:
                 answer = chain.invoke({"context": context, "question": question})
                 return answer, "gemini-2.5-flash"
             except Exception:
-                return "Hệ thống đang quá tải Vui lòng thử lại sau."
+                return "Hệ thống đang quá tải. Vui lòng thử lại sau.", "error"
         raise e
